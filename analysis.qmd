@@ -1,4 +1,103 @@
 ---
 title: "Analyzing US Births"
 author: "Mayah"
+execute:
+  echo: false
 ---
+
+```{r}
+#| message: false
+library(tidyverse)
+library(readxl)
+```
+
+```{r}
+#| cache: true
+births_tibble <- read_excel("data/us_births_1994_2014.xlsx") |>
+  mutate(day_of_week = factor(
+    day_of_week,
+    levels = c("Sun", "Mon", "Tues", "Wed", "Thurs", "Fri", "Sat"),
+    ordered = TRUE
+  ))
+```
+
+```{r}
+average_births_by_date <- births_tibble |>
+  group_by(month, date_of_month) |>
+  summarize(average_births = mean(births), .groups = "drop")
+
+ggplot(
+  average_births_by_date,
+  aes(
+    x = date_of_month,
+    y = factor(month, levels = 12:1, labels = month.name[12:1]),
+    fill = average_births
+  )
+) +
+  geom_tile() +
+  labs(x = "Day of month", y = "Month", fill = "Mean births")
+```
+
+```{r}
+christmas_by_year <- births_tibble |>
+  filter(month == 12) |>
+  group_by(year) |>
+  summarize(
+    christmas_births = births[date_of_month == 25],
+    christmas_weekday = day_of_week[date_of_month == 25],
+    surrounding_average = mean(births[date_of_month %in% c(20:24, 27:30)]),
+    pct_of_baseline = 100 * christmas_births / surrounding_average,
+    .groups = "drop"
+  )
+christmas_by_year
+```
+
+```{r}
+ggplot(christmas_by_year, aes(x = year, y = pct_of_baseline)) +
+  geom_line() +
+  geom_point(aes(color = christmas_weekday)) +
+  labs(x = "Year", y = "December 25 births (% of baseline)")
+```
+
+```{r}
+births_model <- lm(births ~ year + month + day_of_week, data = births_tibble)
+summary(births_model)$r.squared
+```
+
+```{r}
+births_adjusted <- births_tibble |>
+  mutate(pct_resid = residuals(births_model) / mean(births) * 100)
+
+calendar_resid <- births_adjusted |>
+  group_by(month, date_of_month) |>
+  summarize(mean_pct_resid = mean(pct_resid), .groups = "drop") |>
+  filter(!(month == 2 & date_of_month == 29)) |>
+  mutate(calendar_date = as.Date(sprintf("2001-%02d-%02d", month, date_of_month))) |>
+  arrange(calendar_date)
+
+calendar_resid
+```
+
+```{r}
+holiday_dips <- calendar_resid |>
+  filter(calendar_date %in% as.Date(c(
+    "2001-01-01", "2001-07-04", "2001-12-24", "2001-12-25"
+  ))) |>
+  mutate(holiday = case_when(
+    calendar_date == as.Date("2001-01-01") ~ "New Year's Day",
+    calendar_date == as.Date("2001-07-04") ~ "Independence Day",
+    calendar_date == as.Date("2001-12-24") ~ "Christmas Eve",
+    calendar_date == as.Date("2001-12-25") ~ "Christmas"
+  ))
+
+ggplot(calendar_resid, aes(x = calendar_date, y = mean_pct_resid)) +
+  geom_hline(yintercept = 0, color = "gray50") +
+  geom_line() +
+  geom_text(
+    data = holiday_dips,
+    aes(label = holiday),
+    nudge_x = 3,
+    hjust = 0
+  ) +
+  labs(x = "Calendar date", y = "Mean birth-count residual (% of mean)")
+```
